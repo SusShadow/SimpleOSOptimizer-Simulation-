@@ -3,6 +3,7 @@
 #pragma comment(lib, "Comctl32.lib")
 #include <windows.h>
 #include <commctrl.h>
+#include <tchar.h>
 
 // Colors
 #define CLR_BG          RGB(15, 15, 25)
@@ -19,6 +20,65 @@
 #define ID_BTN2 102
 #define ID_BTN3 103
 #define ID_BTN4 104
+
+#define REG_KEY L"Software\\CoreTune"
+
+void SaveWindowPos(HWND hwnd)
+{
+    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+    GetWindowPlacement(hwnd, &wp);
+
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, REG_KEY, 0, NULL,
+    REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueEx(hKey, L"Left", 0, REG_DWORD, (BYTE*)&wp.rcNormalPosition.left, sizeof(DWORD));
+        RegSetValueEx(hKey, L"Top", 0, REG_DWORD, (BYTE*)&wp.rcNormalPosition.top, sizeof(DWORD));
+        RegSetValueEx(hKey, L"Right", 0, REG_DWORD, (BYTE*)&wp.rcNormalPosition.right, sizeof(DWORD));
+        RegSetValueEx(hKey, L"Bottom", 0, REG_DWORD, (BYTE*)&wp.rcNormalPosition.bottom, sizeof(DWORD));
+        RegSetValueEx(hKey, L"ShowCmd", 0, REG_DWORD, (BYTE*)&wp.showCmd, sizeof(DWORD));
+        RegCloseKey(hKey);
+    }
+}
+
+void LoadWindowPos(HWND hwnd)
+{
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, REG_KEY, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+    {
+        SetWindowPos(hwnd, NULL, 100, 100, 900, 600, SWP_NOZORDER);
+        return; //default position
+    }
+
+    DWORD left, top, right, bottom, showCmd;
+    DWORD size = sizeof(DWORD);
+
+    if (RegQueryValueEx(hKey, L"Left", NULL, NULL, (BYTE*)&left, &size) != ERROR_SUCCESS ||
+        RegQueryValueEx(hKey, L"Top", NULL, NULL, (BYTE*)&top, &size) != ERROR_SUCCESS ||
+        RegQueryValueEx(hKey, L"Right", NULL, NULL, (BYTE*)&right, &size) != ERROR_SUCCESS ||
+        RegQueryValueEx(hKey, L"Bottom", NULL, NULL, (BYTE*)&bottom, &size) != ERROR_SUCCESS ||
+        RegQueryValueEx(hKey, L"ShowCmd", NULL, NULL, (BYTE*)&showCmd, &size) != ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            SetWindowPos(hwnd, NULL, 100, 100, 900, 600, SWP_NOZORDER);
+            return;
+        }
+    
+    RegCloseKey(hKey);
+
+    LONG w = (LONG)right - (LONG)left;
+    LONG h = (LONG)bottom - (LONG)top;
+    if (w < 400 || h < 300)
+    {
+        SetWindowPos(hwnd, NULL, 100, 100, 900, 600, SWP_NOZORDER);
+        return;
+    }
+
+    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT)};
+    wp.rcNormalPosition = { (LONG)left, (LONG)top, (LONG)right, (LONG)bottom };
+    wp.showCmd = showCmd;
+    SetWindowPlacement(hwnd, &wp);
+}
 
 // Globals
 HFONT hFontUI    = NULL;
@@ -160,6 +220,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 SendMessage(hBtns[i], WM_SETFONT, (WPARAM)hFontUI, TRUE);
                 SetWindowSubclass(hBtns[i], BtnProc, ID_BTN1 + i, 0);
             }
+            LoadWindowPos(hwnd);
             break;
         }
 
@@ -221,12 +282,54 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         case WM_ERASEBKGND:
+        {
             return 1;
+        }
+
+        case WM_KEYDOWN:
+        {
+            if (wParam == VK_F11)
+            {
+                static bool isFullscreen = false;
+                static WINDOWPLACEMENT prevPlacement = { sizeof(WINDOWPLACEMENT) };
+
+                if (!isFullscreen)
+                {
+                    //Save current window position
+                    GetWindowPlacement(hwnd, &prevPlacement);
+
+                    //Remove window chrome and maximize to montior
+                    MONITORINFO mi = { sizeof(MONITORINFO) };
+                    GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi);
+
+                    SetWindowLongPtr(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+                    SetWindowPos(hwnd, HWND_TOP,
+                        mi.rcMonitor.left, mi.rcMonitor.top,
+                        mi.rcMonitor.right - mi.rcMonitor.left,
+                        mi.rcMonitor.bottom - mi.rcMonitor.top,
+                        SWP_FRAMECHANGED);
+                    
+                        isFullscreen = true;
+                }
+                else
+                {
+                    //Restore previous style and position
+                    SetWindowLongPtr(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+                    SetWindowPlacement(hwnd, &prevPlacement);
+                    SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                    
+                        isFullscreen = false;
+                }
+            }
+            break;
+        }
 
         case WM_DESTROY:
         {
             DeleteObject(hFontUI);
             DeleteObject(hFontTitle);
+            SaveWindowPos(hwnd);
             PostQuitMessage(0);
             return 0;
         }
